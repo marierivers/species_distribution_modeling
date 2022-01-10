@@ -6,9 +6,11 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
-# 2.1 Install Packages
+# Species Distribution Modeling
+# Part 1: Explore
+## Install Packages
 ```{r}
 # load packages, installing if missing
 if (!require(librarian)){
@@ -32,7 +34,7 @@ dir_data <- here("data/sdm")
 dir.create(dir_data, showWarnings = F, recursive = T)
 ```
 
-# 2.3 Get Species Observations
+## Get Species Observations
 ```{r}
 obs_csv <- file.path(dir_data, "obs.csv")
 obs_geo <- file.path(dir_data, "obs.geojson")
@@ -67,8 +69,8 @@ nrow(obs) # number of rows
 mapview::mapview(obs, map.types = "Esri.WorldPhysical")
 ```
 
-# 2.4 Get Environmental Data
-## 2.4.1 Presence
+## Get Environmental Data
+### Presence
 ```{r}
 dir_env <- file.path(dir_data, "env")
 
@@ -139,7 +141,7 @@ env_stack <- stack(env_stack_grd)
 plot(env_stack, nc=2)
 ```
 
-## 2.4.2 Pseudo-Absence
+### Pseudo-Absence
 ```{r}
 absence_geo <- file.path(dir_data, "absence.geojson")
 pts_geo     <- file.path(dir_data, "pts.geojson")
@@ -249,7 +251,8 @@ GGally::ggpairs(
   select(pts_env, -ID),
   aes(color = factor(present)))
 ```
-# Setup Data
+# Part 2: Logistic Regression
+## Setup Data
 - Drop rows with any NAs
 - remove terms we don't want to model
 - use a simplified formula `_present_ ~.` to predict where the species is present based on all other fields in the data from (ie. y ~ X1 + X2 + ...Xn)
@@ -260,7 +263,7 @@ d <- pts_env %>%
 nrow(d)
 ```
 
-# Linear Model
+## Linear Model
 ```{r}
 # fit a linear model
 mdl_linear <- lm(present ~ ., data = d)
@@ -357,5 +360,156 @@ y_predict_maxent <- predict(env_stack, mdl_maxent) #, ext=ext, progress='')
 plot(y_predict_maxent, main='Maxent, raw prediction')
 data(wrld_simpl, package = "maptools")
 plot(wrld_simpl, add=TRUE, border='dark grey')
+```
+# Part 3: Decision Trees
+Use decision trees as a classification technique to the data with the response being categorical (factor(present))
+```{r}
+# load packages
+librarian:::shelf(
+  caret, # X: modeling framework
+  dplyr, ggplot, here, reader, 
+  pdp, # X: partial dependence plots
+  rpart, # m: recursive partition modeling
+  rpart.plot, # m: recusive partition plotting
+  rsample, # d: split train/test data
+  skimr, # d: skim summarize data table
+  vip) # X: variable importance
+```
+```{r}
+# options
+options(
+  scipen = 999,
+  readr.show_col_types = F)
+set.seed(42)
+
+# graphical theme
+ggplot2::theme_set(ggplot2::theme_light())
+
+# paths
+# dir_data    <- here("data/sdm")
+# pts_env_csv <- file.path(dir_data, "pts_env.csv")
+
+# read data
+# pts_env <- read_csv(pts_env_csv)
+d <- pts_env %>% 
+  select(-ID) %>% # not used as a predictor x
+  mutate(
+    present = factor(present)) %>% 
+  na.omit()
+skim(d)
+```
+
+## Split data into training and testing
+```{r}
+# create training set with 80% of full data
+d_split <- rsample::initial_split(d, prop = 0.8, strata = "present")
+d_train <- rsample::training(d_split)
+
+# show number of rows present in 0 vs 1
+table(d$present)
+```
+```{r}
+table(d_train$present)
+```
+## Partition, depth=1
+```{r}
+# run decision stump model
+mdl_stump <- rpart(
+  present ~ ., data = d_train,
+  control = list(
+    cp = 0, minbucket = 5, maxdepth = 1))
+mdl_stump
+```
+
+```{r}
+# plot tree
+par(mar = c(1, 1, 1, 1))
+rpart.plot(mdl_stump)
+```
+
+## Partition, depth=default
+```{r}
+# decision tree with defaults
+mdl_default_tree <- rpart(present ~ ., data = d_train)
+mdl_default_tree
+```
+
+```{r}
+rpart.plot(mdl_default_tree)
+```
+```{r}
+# plot complexity parameter
+plotcp(mdl_default_tree)
+```
+```{r}
+# rpart cross validation results
+mdl_default_tree$cptable
+```
+
+## Feature Interpretation
+```{r}
+# caret cross validation results
+mdl_caret <- train(
+  present ~ .,
+  data = d_train,
+  method = "rpart",
+  trControl = trainControl(method = "cv", number = 10),
+  tuneLength = 20)
+
+ggplot(mdl_caret)
+```
+
+```{r}
+vip(mdl_caret, num_features = 40, bar = FALSE)
+```
+```{r}
+# construct partial dependence plots
+p1 <- partial(mdl_caret, pred.var = "lat") %>%  autoplot()
+p2 <- partial(mdl_caret, pred.var = "WC_bio2") %>% autoplot()
+p3 <- partial(mdl_caret, pred.var = c("lat", "WC_bio2")) %>% 
+  plotPartial(levelplot = FALSE, zlab = "yhat", drape = TRUE,
+              colorkey = TRUE, screen = list(z = -20, x = -60))
+```
+
+```{r}
+# display plots side by side
+gridExtra::grid.arrange(p1, p2, p3, ncol = 3)
+```
+## Random Forests
+```{r}
+# load additional packages
+librarian::shelf(
+  ranger) # random forest modeling
+```
+
+### Fit
+```{r}
+# number of features
+n_features <- length(setdiff(names(d_train), "present"))
+
+# fit a default random forest model
+mdl_rf <- ranger(present ~ ., data = d_train)
+
+# get out of the box RMSE
+(default_rmse <- sqrt(mdl_rf$prediction.error))
+```
+### Feature Interpretation
+```{r}
+# re-run model with impurity-based variable importance
+mdl_impurity <- ranger(
+  present ~ ., data = d_train,
+  importance = "impurity")
+
+# re-run model with permutation-based variable importance
+mdl_permutation <- ranger(
+  present ~ ., data = d_train,
+  importance = "permutation")
+```
+
+```{r}
+p1_rf <- vip::vip(mdl_impurity, bar = FALSE)
+p2_rf <- vip::vip(mdl_permutation, bar = FALSE)
+
+gridExtra::grid.arrange(p1_rf, p2_rf, nrow = 1)
 ```
 

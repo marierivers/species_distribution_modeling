@@ -217,6 +217,13 @@ pts_env %>%
       dom = "t",
       pageLength = 20))
 ```
+```{r}
+nrow(pts_env)
+```
+
+```{r}
+datatable(pts_env, rownames = F)
+```
 
 ## Term Plots
 ```{r}
@@ -235,5 +242,120 @@ pts_env %>%
   theme(
     legend.position = c(1, 0),
     legend.justification = c(1, 0))
+```
+## Pairs plot to show correlations between variables
+```{r}
+GGally::ggpairs(
+  select(pts_env, -ID),
+  aes(color = factor(present)))
+```
+# Setup Data
+- Drop rows with any NAs
+- remove terms we don't want to model
+- use a simplified formula `_present_ ~.` to predict where the species is present based on all other fields in the data from (ie. y ~ X1 + X2 + ...Xn)
+```{r}
+d <- pts_env %>% 
+  select(-ID) %>% # remove terms we don't want to model 
+  tidyr::drop_na() # drop the rows with NA values
+nrow(d)
+```
+
+# Linear Model
+```{r}
+# fit a linear model
+mdl_linear <- lm(present ~ ., data = d)
+summary(mdl_linear)
+```
+
+```{r}
+y_predict <- predict(mdl_linear, d, type="response")
+y_true <- d$present
+range(y_predict)
+```
+```{r}
+range(y_true)
+```
+## Generalized Linear Model
+```{r}
+# fit a generalized linear model with a binomial logit link function
+mdl_glm <- glm(present ~ ., family = binomial(link="logit"), data = d)
+summary(mdl_glm)
+```
+```{r}
+y_predict_glm <- predict(mdl_glm, d, type = "response")
+range(y_predict_glm)
+```
+
+Look at the terms plots to see the relationship between predictor and response
+```{r}
+# show term plots
+termplot(mdl_glm, partial.resid = TRUE, se = TRUE, main = F, ylim = "free")
+```
+## Generalize Additive Model
+With a general additive model we can add "wiggle" to the relationship between predictor and response by introducing smooth s() terms
+```{r}
+librarian::shelf(mgcv)
+
+# fit a generalized additive model with smooth predictors
+mdl_gen_add <- mgcv::gam(
+  formula = present ~ s(WC_alt) + s(WC_bio1) + s(WC_bio2) + s(ER_tri) + s(ER_topoWet) + s(lon) + s(lat),
+  family = binomial, data = d)
+summary(mdl_gen_add)
+```
+```{r}
+# show term plot
+plot(mdl_gen_add, scale=0)
+```
+
+## Maxent (Maximum Entropy)
+```{r}
+# load extra packages
+librarian::shelf(
+  maptools, sf)
+
+mdl_maxent_rds <- file.path(dir_data, "mdl_maxent.rds")
+
+# show version of maxent
+if (!interactive())
+  maxent()
+```
+```{r}
+# get environmental rasters
+# NOTE: the first part of Lab 1. SDM - Explore got updated to write this clipped environmental raster stack
+
+# env_stack_grd <- file.path(dir_data, "env_stack.grd")
+# env_stack <- stack(env_stack_grd)
+# plot(env_stack, nc=2)
+```
+
+```{r}
+# get the presence-only observation points (maxent extracts raster values for you)
+# obs_geo2<- file.path(dir_data, "obs")
+obs_sp <- read_sf(obs_geo) %>%
+  sf::as_Spatial() # maxent prefers sp::SpatialPoints over newer sf::sf class
+
+# fit a maxent entropy model
+if (!file.exists(mdl_maxent_rds)){
+  mdl_maxent <- maxent(env_stack, obs_sp)
+  readr::write_rds(mdl_maxent, mdl_maxent_rds)
+}
+mdl_maxent <- read_rds(mdl_maxent_rds)
+```
+
+```{r}
+# plot variable contributions per predictor
+plot(mdl_maxent)
+```
+```{r}
+# plot term plots
+response(mdl_maxent)
+```
+```{r}
+# predict
+y_predict_maxent <- predict(env_stack, mdl_maxent) #, ext=ext, progress='')
+
+plot(y_predict_maxent, main='Maxent, raw prediction')
+data(wrld_simpl, package = "maptools")
+plot(wrld_simpl, add=TRUE, border='dark grey')
 ```
 

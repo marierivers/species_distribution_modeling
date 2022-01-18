@@ -38,10 +38,8 @@ dir.create(dir_data, showWarnings = F, recursive = T)
 ```{r}
 obs_csv <- file.path(dir_data, "obs.csv")
 obs_geo <- file.path(dir_data, "obs.geojson")
-redo    <- FALSE
-```
+redo    <- TRUE # change back to FALSE...xxx
 
-```{r}
 if (!file.exists(obs_geo) | redo){
   # get species occurrence data from GBIF with coordinates
   (res <- spocc::occ(
@@ -57,17 +55,40 @@ if (!file.exists(obs_geo) | redo){
     sf::st_as_sf(
       coords = c("longitude", "latitude"),
       crs = st_crs(4326)) %>% 
-    select(prov, key) # save space (joinable from obs_csv)
+    select(prov, key, issues, basisOfRecord, occurrenceStatus, eventDate, isInCluster, lifeStage, locality, collectionCode, recordedBy, fieldNotes, eventTime, behavior, verbatimElevation, lifeStage, dateIdentified, stateProvince, verbatimLocality, occurrenceRemarks, identificationID, occurrenceRemarks, informationWithheld, identificationRemarks) # save space (joinable from obs_csv)
   sf::write_sf(obs, obs_geo, delete_dsn=T)
 }
 obs <- sf::read_sf(obs_geo)
 nrow(obs) # number of rows
 ```
 
+## check for duplicate observations
+```{r}
+duplicates <- duplicated(df$)
+sum(duplicates)
+
+df_dup_check <- df %>% 
+  mutate(dups = duplicates)
+```
+```{r}
+duplicates <- duplicated(obs$geometry)
+sum(duplicates)
+
+obs_dup_check <- obs %>% 
+  mutate(dups = duplicates)
+```
+
+
 ```{r}
 # show points on map
 mapview::mapview(obs, map.types = "Esri.WorldPhysical")
 ```
+
+**Question 1**
+There are a total of 3,943,548 observations for bald eagle in the GBIF database. For this model, I limited the number of observations to 10,000.
+
+**Question 2**
+xxx...odd observations
 
 ## Get Environmental Data
 ### Presence
@@ -228,6 +249,7 @@ datatable(pts_env, rownames = F)
 ```
 
 ## Term Plots
+The term plots display predictors and responses. For modeling purposes, predictors are preferred where presence occupies a distinct niche from the background absence points. The term plots are a good way visualize how differentiated presence is from absence for each predictor.
 ```{r}
 pts_env %>% 
   select(-ID) %>% 
@@ -245,12 +267,17 @@ pts_env %>%
     legend.position = c(1, 0),
     legend.justification = c(1, 0))
 ```
+Based on the results of Term Plots, topographic wetness (ER_topoWet) and terrain roughness index (ER_tri) are similarly distributed for presence and absence points and are therefore likely not strong predictors for a bald eagle species distribution model.
+xxx...try adding other predictors
+
 ## Pairs plot to show correlations between variables
 ```{r}
 GGally::ggpairs(
   select(pts_env, -ID),
-  aes(color = factor(present)))
+  aes(color = factor(present), alpha = 0.5))
 ```
+Based on the results of the pairs plots, the most strongly correlated environmental predictors are topographic wetness (ER_topoWet) and terrain roughness index (ER_tri).
+
 # Part 2: Logistic Regression
 ## Setup Data
 - Drop rows with any NAs
@@ -278,7 +305,10 @@ range(y_predict)
 ```{r}
 range(y_true)
 ```
+An issue with this linear model is that the predicted response is not limited to a binary 0 or 1 to represent absence or precense.
+
 ## Generalized Linear Model
+This model constrains the response to be closer to the range from 0 to 1.
 ```{r}
 # fit a generalized linear model with a binomial logit link function
 mdl_glm <- glm(present ~ ., family = binomial(link="logit"), data = d)
@@ -311,6 +341,7 @@ plot(mdl_gen_add, scale=0)
 ```
 
 ## Maxent (Maximum Entropy)
+Maxent is a commonly used species distribution model that performs well with few input data points, only requires presence points and is easy to use with a Java graphical user interface (GUI). Since this model only has presence points, it samples the background for comparision.
 ```{r}
 # load extra packages
 librarian::shelf(

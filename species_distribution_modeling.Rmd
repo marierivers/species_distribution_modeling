@@ -64,11 +64,11 @@ nrow(obs) # number of rows
 
 ## check for duplicate observations
 ```{r}
-duplicates <- duplicated(df$)
-sum(duplicates)
-
-df_dup_check <- df %>% 
-  mutate(dups = duplicates)
+# duplicates <- duplicated(df$)
+# sum(duplicates)
+# 
+# df_dup_check <- df %>% 
+#   mutate(dups = duplicates)
 ```
 ```{r}
 duplicates <- duplicated(obs$geometry)
@@ -353,6 +353,7 @@ mdl_maxent_rds <- file.path(dir_data, "mdl_maxent.rds")
 if (!interactive())
   maxent()
 ```
+
 ```{r}
 # get environmental rasters
 # NOTE: the first part of Lab 1. SDM - Explore got updated to write this clipped environmental raster stack
@@ -380,10 +381,12 @@ mdl_maxent <- read_rds(mdl_maxent_rds)
 # plot variable contributions per predictor
 plot(mdl_maxent)
 ```
+
 ```{r}
 # plot term plots
 response(mdl_maxent)
 ```
+
 ```{r}
 # predict
 y_predict_maxent <- predict(env_stack, mdl_maxent) #, ext=ext, progress='')
